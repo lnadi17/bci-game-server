@@ -54,6 +54,7 @@ async def acquisition_loop_async(stream, annotation_list, timestamp_data, window
                 timestamp_data['latest'] = timestamps[-1]  # last sample time
                 if timestamp_data['first'] is None:
                     timestamp_data['first'] = timestamps[0]  # first sample time
+                    annotation_list.append((timestamps[0], "Stream Started"))  # add start annotation
 
             if save_path and data.size > 0:
                 np.save(outfile, data)
