@@ -76,9 +76,14 @@ async def websocket_server_async(annotation_list, latest_timestamp):
 
         await server.send_to_client(websocket, {"response": "Message received"})
 
-    server.on_connect(lambda ws, p: print(f"Client connected: {id(ws)}")) \
-        .on_message(on_message) \
-        .on_disconnect(lambda ws: print(f"Client disconnected: {id(ws)}"))
+    # Create async callbacks
+    async def on_connect(websocket, path):
+        print(f"Client connected: {id(websocket)}")
+
+    async def on_disconnect(websocket):
+        print(f"Client disconnected: {id(websocket)}")
+
+    server.on_connect(on_connect).on_message(on_message).on_disconnect(on_disconnect)
 
     await server.start()
     print("WebSocket server started!")
