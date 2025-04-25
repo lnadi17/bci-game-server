@@ -1,7 +1,10 @@
+import asyncio
 import os
 import time
 import uuid
 from tempfile import TemporaryFile
+import multiprocessing
+from websocket_server import WebSocketServer
 
 import numpy as np
 from mne import set_log_level
@@ -35,7 +38,7 @@ def get_stream():
     return stream
 
 
-def acquisition_loop(stream, window_size=2, save_path=None):
+async def acquisition_loop_async(stream, window_size=2, save_path=None):
     outfile = TemporaryFile()
     try:
         while True:
@@ -43,7 +46,7 @@ def acquisition_loop(stream, window_size=2, save_path=None):
             winsize_time = winsize_samples / stream.info["sfreq"]
 
             if winsize_time < window_size:
-                time.sleep(0.05)
+                await asyncio.sleep(0.05)
                 continue
 
             print(f'New samples (s): {winsize_time}')
@@ -56,11 +59,45 @@ def acquisition_loop(stream, window_size=2, save_path=None):
                 if data.size > 0:
                     print(f"Saving chunk: {data.shape}")
                     np.save(outfile, data)
-    except KeyboardInterrupt:
-        print("Acquisition stopped by user.")
+    except asyncio.CancelledError:
+        print("Acquisition stopped.")
     finally:
         save_as_fif(outfile, save_path, stream.info)
         outfile.close()
+
+
+async def websocket_server_async():
+    server = WebSocketServer()
+
+    async def on_connect(websocket, path):
+        print(f"Client connected: {id(websocket)}")
+
+    async def on_message(websocket, message):
+        print(f"Message from {id(websocket)}: {message}")
+        await server.send_to_client(websocket, {"response": "Message received"})
+
+    async def on_disconnect(websocket):
+        print(f"Client disconnected: {id(websocket)}")
+
+    server.on_connect(on_connect).on_message(on_message).on_disconnect(on_disconnect)
+
+    await server.start()
+    print("WebSocket server started!")
+    try:
+        await asyncio.Future()  # Run forever
+    except asyncio.CancelledError:
+        await server.stop()
+
+
+async def main():
+    # Start the LSL stream
+    stream = get_stream()
+
+    # Run websocket server and acquisition loop concurrently
+    await asyncio.gather(
+        websocket_server_async(),
+        acquisition_loop_async(stream, window_size=2, save_path='./recordings')
+    )
 
 
 def save_as_fif(outfile, save_path, info):
@@ -94,10 +131,5 @@ def save_as_fif(outfile, save_path, info):
         print(f"Data saved to {save_path}")
 
 
-def main():
-    stream = get_stream()
-    acquisition_loop(stream, window_size=2, save_path='./recordings')
-
-
 if __name__ == '__main__':
-    main()
+    asyncio.run(main())
