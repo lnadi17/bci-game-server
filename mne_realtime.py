@@ -175,6 +175,8 @@ def save_as_fif(outfile, save_path, info, annotation_list, timestamp_data):
         except EOFError:
             break
 
+    info = mne.create_info(info['ch_names'], info['sfreq'], ch_types='eeg')
+
     full_data = np.concatenate(full_data, axis=1)
     raw = mne.io.RawArray(full_data, info=info)
 
