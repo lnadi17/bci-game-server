@@ -9,6 +9,7 @@ from websocket_server import WebSocketServer
 import numpy as np
 from mne import set_log_level
 import mne
+from mne import Annotations
 
 from mne_lsl.stream import StreamLSL
 
@@ -38,97 +39,102 @@ def get_stream():
     return stream
 
 
-async def acquisition_loop_async(stream, window_size=2, save_path=None):
+async def acquisition_loop_async(stream, annotation_list, latest_timestamp, window_size=2, save_path=None):
     outfile = TemporaryFile()
     try:
         while True:
             winsize_samples = stream.n_new_samples
-            winsize_time = winsize_samples / stream.info["sfreq"]
-
-            if winsize_time < window_size:
+            if winsize_samples < window_size * stream.info["sfreq"]:
                 await asyncio.sleep(0.05)
                 continue
 
-            print(f'New samples (s): {winsize_time}')
-
-            # Get a new chunk of data
             data, timestamps = stream.get_data(winsize=window_size)
-            print(f'Acquired chunk: {data.shape}')
 
-            if save_path:
-                if data.size > 0:
-                    print(f"Saving chunk: {data.shape}")
-                    np.save(outfile, data)
+            if timestamps.size > 0:
+                latest_timestamp['value'] = timestamps[-1]  # last sample time
+
+            if save_path and data.size > 0:
+                np.save(outfile, data)
     except asyncio.CancelledError:
         print("Acquisition stopped.")
     finally:
-        save_as_fif(outfile, save_path, stream.info)
+        save_as_fif(outfile, save_path, stream.info, annotation_list)
         outfile.close()
 
 
-async def websocket_server_async():
+async def websocket_server_async(annotation_list, latest_timestamp):
     server = WebSocketServer()
 
-    async def on_connect(websocket, path):
-        print(f"Client connected: {id(websocket)}")
-
     async def on_message(websocket, message):
-        print(f"Message from {id(websocket)}: {message}")
+        timestamp = latest_timestamp['value']
+        if timestamp is None:
+            print("Warning: No timestamp available yet, annotation skipped.")
+            return
+
+        print(f"Message from {id(websocket)} at {timestamp}: {message}")
+        annotation_list.append((timestamp, message))
+
         await server.send_to_client(websocket, {"response": "Message received"})
 
-    async def on_disconnect(websocket):
-        print(f"Client disconnected: {id(websocket)}")
-
-    server.on_connect(on_connect).on_message(on_message).on_disconnect(on_disconnect)
+    server.on_connect(lambda ws, p: print(f"Client connected: {id(ws)}")) \
+        .on_message(on_message) \
+        .on_disconnect(lambda ws: print(f"Client disconnected: {id(ws)}"))
 
     await server.start()
     print("WebSocket server started!")
+
     try:
-        await asyncio.Future()  # Run forever
+        await asyncio.Future()
     except asyncio.CancelledError:
         await server.stop()
 
 
 async def main():
-    # Start the LSL stream
     stream = get_stream()
 
-    # Run websocket server and acquisition loop concurrently
+    # Shared structure for annotations
+    latest_timestamp = {'value': None}
+    annotation_list = []
+
     await asyncio.gather(
-        websocket_server_async(),
-        acquisition_loop_async(stream, window_size=2, save_path='./recordings')
+        websocket_server_async(annotation_list, latest_timestamp),
+        acquisition_loop_async(stream, annotation_list, latest_timestamp, window_size=2, save_path='./recordings')
     )
 
 
-def save_as_fif(outfile, save_path, info):
-    # Go to the start
+def save_as_fif(outfile, save_path, info, annotation_list):
     _ = outfile.seek(0)
-
-    # Load the full data
     full_data = []
 
     while True:
         try:
             data = np.load(outfile)
-            print(f"Loaded chunk: {data.shape}")
             full_data.append(data)
         except EOFError:
-            print("EOFError! No more data to read.")
             break
 
-    # Create a fif file based on the full data concatenated along the first axis
     full_data = np.concatenate(full_data, axis=1)
-    print(f"Full data shape: {full_data.shape}")
+    raw = mne.io.RawArray(full_data, info=info)
 
-    # Create a folder to save the data (exist_ok=True)
+    # Create MNE annotations
+    if annotation_list:
+        onsets = []
+        durations = []
+        descriptions = []
+
+        for timestamp, description in annotation_list:
+            # Convert timestamp to relative time (in seconds)
+            onset = timestamp - raw.first_time
+            onsets.append(onset)
+            durations.append(0.0)  # or set if needed
+            descriptions.append(description)
+
+        raw.set_annotations(Annotations(onsets, durations, descriptions))
+
     os.makedirs(save_path, exist_ok=True)
-
-    # Save the data to a fif file
     uid = str(uuid.uuid4())[-4:]
-    mne.io.RawArray(full_data, info=info).save(os.path.join(save_path, f'recording_{uid}.raw.fif'), overwrite=True)
-
-    if save_path:
-        print(f"Data saved to {save_path}")
+    raw.save(os.path.join(save_path, f'recording_{uid}.raw.fif'), overwrite=True)
+    print(f"Data saved to {save_path}")
 
 
 if __name__ == '__main__':
