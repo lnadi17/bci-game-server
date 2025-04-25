@@ -1,5 +1,6 @@
 import os
 import time
+import uuid
 from tempfile import TemporaryFile
 
 import numpy as np
@@ -15,8 +16,8 @@ def get_stream():
     montage = mne.channels.make_standard_montage("standard_1020")
     ch_names = ['Fz', 'C3', 'Cz', 'C4', 'Pz', 'PO7', 'Oz', 'PO8']
 
-    # stream = StreamLSL(bufsize=5, name='UnicornRecorderRawDataLSLStream')
-    stream = StreamLSL(bufsize=5, source_id='testStream')
+    # stream = StreamLSL(bufsize=10, name='UnicornRecorderRawDataLSLStream')
+    stream = StreamLSL(bufsize=10, source_id='testStream')
     stream.connect(processing_flags='all', acquisition_delay=0.001)
     # stream.pick(picks=['0', '1', '2', '3', '4', '5', '6', '7'])
     # stream.rename_channels({
@@ -34,27 +35,27 @@ def get_stream():
     return stream
 
 
-def acquisition_loop(stream, save_path=None):
+def acquisition_loop(stream, window_size=2, save_path=None):
     outfile = TemporaryFile()
-
-    if save_path:
-        # Create a folder to save the data (exist_ok=True)
-        os.makedirs(save_path, exist_ok=True)
-
     try:
         while True:
-            # Figure how many new samples are available, in seconds
-            winsize = stream.n_new_samples / stream.info["sfreq"]
-            print(f'New samples (s): {winsize}')
+            winsize_samples = stream.n_new_samples
+            winsize_time = winsize_samples / stream.info["sfreq"]
+
+            if winsize_time < window_size:
+                time.sleep(0.05)
+                continue
+
+            print(f'New samples (s): {winsize_time}')
+
             # Get a new chunk of data
-            data, timestamps = stream.get_data(winsize=winsize)
-            print(data.shape)
+            data, timestamps = stream.get_data(winsize=window_size)
+            print(f'Acquired chunk: {data.shape}')
 
             if save_path:
                 if data.size > 0:
-                    print(f"Received chunk: {data.shape}")
+                    print(f"Saving chunk: {data.shape}")
                     np.save(outfile, data)
-            time.sleep(1)
     except KeyboardInterrupt:
         print("Acquisition stopped by user.")
     finally:
@@ -82,8 +83,12 @@ def save_as_fif(outfile, save_path, info):
     full_data = np.concatenate(full_data, axis=1)
     print(f"Full data shape: {full_data.shape}")
 
+    # Create a folder to save the data (exist_ok=True)
+    os.makedirs(save_path, exist_ok=True)
+
     # Save the data to a fif file
-    mne.io.RawArray(full_data, info=info).save(os.path.join(save_path, 'recording.raw.fif'))
+    uid = str(uuid.uuid4())[-4:]
+    mne.io.RawArray(full_data, info=info).save(os.path.join(save_path, f'recording_{uid}.raw.fif'), overwrite=True)
 
     if save_path:
         print(f"Data saved to {save_path}")
@@ -91,7 +96,7 @@ def save_as_fif(outfile, save_path, info):
 
 def main():
     stream = get_stream()
-    acquisition_loop(stream, save_path='./recordings')
+    acquisition_loop(stream, window_size=2, save_path='./recordings')
 
 
 if __name__ == '__main__':
