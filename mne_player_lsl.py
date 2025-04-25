@@ -10,13 +10,17 @@ from mne_lsl.stream import StreamLSL as Stream
 
 set_log_level("WARNING")
 
-source_id = uuid.uuid4().hex
+source_id = "testStream"
 fname = sample.data_path() / "sample-ant-raw.fif"
-player = Player(fname, chunk_size=200, source_id=source_id).start()
+player = Player(fname, chunk_size=200, source_id=source_id, n_repeat=2).start()
 print(player.info)
 
-stream = Stream(bufsize=2, source_id=source_id).connect()
-print(stream.info)
+player.start()
+while player.running:
+    pass
 
-ch_types = stream.get_channel_types(unique=True)
-print(f"Channel types included: {', '.join(ch_types)}")
+# stream = Stream(bufsize=2, source_id=source_id).connect()
+# print(stream.info)
+#
+# ch_types = stream.get_channel_types(unique=True)
+# print(f"Channel types included: {', '.join(ch_types)}")

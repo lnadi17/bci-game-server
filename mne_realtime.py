@@ -10,26 +10,29 @@ from mne_lsl.stream import StreamLSL
 
 set_log_level("WARNING")
 
+
 def get_stream():
     montage = mne.channels.make_standard_montage("standard_1020")
     ch_names = ['Fz', 'C3', 'Cz', 'C4', 'Pz', 'PO7', 'Oz', 'PO8']
 
-    stream = StreamLSL(bufsize=5, name='UnicornRecorderRawDataLSLStream')
+    # stream = StreamLSL(bufsize=5, name='UnicornRecorderRawDataLSLStream')
+    stream = StreamLSL(bufsize=5, source_id='testStream')
     stream.connect(processing_flags='all', acquisition_delay=0.001)
-    stream.pick(picks=['0', '1', '2', '3', '4', '5', '6', '7'])
-    stream.rename_channels({
-        '0': 'Fz',
-        '1': 'C3',
-        '2': 'Cz',
-        '3': 'C4',
-        '4': 'Pz',
-        '5': 'PO7',
-        '6': 'Oz',
-        '7': 'PO8',
-    })
+    # stream.pick(picks=['0', '1', '2', '3', '4', '5', '6', '7'])
+    # stream.rename_channels({
+    #     '0': 'Fz',
+    #     '1': 'C3',
+    #     '2': 'Cz',
+    #     '3': 'C4',
+    #     '4': 'Pz',
+    #     '5': 'PO7',
+    #     '6': 'Oz',
+    #     '7': 'PO8',
+    # })
     stream.set_montage(montage)
     print(stream.info)
     return stream
+
 
 def acquisition_loop(stream, save_path=None):
     outfile = TemporaryFile()
@@ -55,10 +58,11 @@ def acquisition_loop(stream, save_path=None):
     except KeyboardInterrupt:
         print("Acquisition stopped by user.")
     finally:
-        save_as_fif(outfile, save_path)
+        save_as_fif(outfile, save_path, stream.info)
         outfile.close()
 
-def save_as_fif(outfile, save_path):
+
+def save_as_fif(outfile, save_path, info):
     # Go to the start
     _ = outfile.seek(0)
 
@@ -74,7 +78,13 @@ def save_as_fif(outfile, save_path):
             print("EOFError! No more data to read.")
             break
 
-    print(full_data)
+    # Create a fif file based on the full data concatenated along the first axis
+    full_data = np.concatenate(full_data, axis=1)
+    print(f"Full data shape: {full_data.shape}")
+
+    # Save the data to a fif file
+    mne.io.RawArray(full_data, info=info).save(os.path.join(save_path, 'recording.raw.fif'))
+
     if save_path:
         print(f"Data saved to {save_path}")
 
@@ -82,6 +92,7 @@ def save_as_fif(outfile, save_path):
 def main():
     stream = get_stream()
     acquisition_loop(stream, save_path='./recordings')
+
 
 if __name__ == '__main__':
     main()
