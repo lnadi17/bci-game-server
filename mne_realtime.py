@@ -102,7 +102,6 @@ def parse_message_into_annotation(message: str):
         event_name = parsed.get("eventName")
         data = parsed.get("data", {})
 
-        # TODO: Parse based on event_name and data
         suffix = ""
         if data.get("frequency"):
             suffix = " " + str(data["frequency"])
