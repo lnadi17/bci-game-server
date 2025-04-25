@@ -12,7 +12,7 @@ set_log_level("WARNING")
 
 source_id = "testStream"
 fname = sample.data_path() / "sample-ant-raw.fif"
-player = Player(fname, chunk_size=200, source_id=source_id, n_repeat=2).start()
+player = Player(fname, chunk_size=200, source_id=source_id, n_repeat=10).start()
 print(player.info)
 
 player.start()
