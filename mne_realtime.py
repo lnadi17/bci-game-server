@@ -1,6 +1,7 @@
 import asyncio
 import os
 import time
+import json
 import uuid
 from tempfile import TemporaryFile
 import multiprocessing
@@ -15,8 +16,29 @@ from mne_lsl.stream import StreamLSL
 
 set_log_level("WARNING")
 
-
 def get_stream():
+    montage = mne.channels.make_standard_montage("standard_1020")
+    ch_names = ['Fz', 'C3', 'Cz', 'C4', 'Pz', 'PO7', 'Oz', 'PO8']
+
+    stream = StreamLSL(bufsize=10, name='UnicornRecorderRawDataLSLStream')
+    # stream = StreamLSL(bufsize=10, source_id='testStream')
+    stream.connect(processing_flags='all', acquisition_delay=0.001)
+    stream.pick(picks=['0', '1', '2', '3', '4', '5', '6', '7'])
+    stream.rename_channels({
+        '0': 'Fz',
+        '1': 'C3',
+        '2': 'Cz',
+        '3': 'C4',
+        '4': 'Pz',
+        '5': 'PO7',
+        '6': 'Oz',
+        '7': 'PO8',
+    })
+    stream.set_montage(montage)
+    print(stream.info)
+    return stream
+
+def get_mock_stream():
     montage = mne.channels.make_standard_montage("standard_1020")
     ch_names = ['Fz', 'C3', 'Cz', 'C4', 'Pz', 'PO7', 'Oz', 'PO8']
 
@@ -70,6 +92,31 @@ async def acquisition_loop_async(stream, annotation_list, timestamp_data, window
         outfile.close()
 
 
+def parse_message_into_annotation(message: str):
+    """Parse JSON message with eventName and data fields."""
+    try:
+        # Parse the JSON string into a Python dictionary
+        parsed = json.loads(message)
+
+        # Extract the required fields
+        event_name = parsed.get("eventName")
+        data = parsed.get("data", {})
+
+        # TODO: Parse based on event_name and data
+        suffix = ""
+        if data.get("frequency"):
+            suffix = " " + str(data["frequency"])
+        if data.get("classLabel"):
+            suffix = " " + str(data["classLabel"])
+        annotation = event_name + suffix
+        return annotation
+    except json.JSONDecodeError:
+        print(f"Error: Failed to parse JSON message: {message}")
+        return None
+    except Exception as e:
+        print(f"Error parsing message: {e}")
+        return None
+
 async def websocket_server_async(annotation_list, timestamp_data):
     server = WebSocketServer()
 
@@ -80,7 +127,10 @@ async def websocket_server_async(annotation_list, timestamp_data):
             return
 
         print(f"Message from {id(websocket)} at {timestamp}: {message}")
-        annotation_list.append((timestamp, message))
+
+        annot = parse_message_into_annotation(message)
+
+        annotation_list.append((timestamp, annot))
 
         await server.send_to_client(websocket, {"response": "Message received"})
 
