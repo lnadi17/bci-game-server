@@ -41,20 +41,25 @@ def get_stream():
 
 async def acquisition_loop_async(stream, annotation_list, timestamp_data, window_size=2, save_path=None):
     outfile = TemporaryFile()
+    last_read_time = None
+
     try:
         while True:
             winsize_samples = stream.n_new_samples
             if winsize_samples < window_size * stream.info["sfreq"]:
-                await asyncio.sleep(0.05)
+                if last_read_time is not None:
+                    # If we are not getting new data, update the latest timestamp
+                    timestamp_data['latest'] = last_read_time + winsize_samples / stream.info["sfreq"]
+                await asyncio.sleep(0.01)
                 continue
 
             data, timestamps = stream.get_data(winsize=window_size)
+            last_read_time = timestamps[-1]
+            timestamp_data['latest'] = last_read_time
 
-            if timestamps.size > 0:
-                timestamp_data['latest'] = timestamps[-1]  # last sample time
-                if timestamp_data['first'] is None:
-                    timestamp_data['first'] = timestamps[0]  # first sample time
-                    annotation_list.append((timestamps[0], "Stream Started"))  # add start annotation
+            if timestamp_data['first'] is None:
+                timestamp_data['first'] = timestamps[0]  # first sample time
+                annotation_list.append((timestamps[0], "Stream Started"))  # add start annotation
 
             if save_path and data.size > 0:
                 np.save(outfile, data)
