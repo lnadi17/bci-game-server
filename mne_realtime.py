@@ -39,7 +39,7 @@ def get_stream():
     return stream
 
 
-async def acquisition_loop_async(stream, annotation_list, latest_timestamp, window_size=2, save_path=None):
+async def acquisition_loop_async(stream, annotation_list, timestamp_data, window_size=2, save_path=None):
     outfile = TemporaryFile()
     try:
         while True:
@@ -51,22 +51,24 @@ async def acquisition_loop_async(stream, annotation_list, latest_timestamp, wind
             data, timestamps = stream.get_data(winsize=window_size)
 
             if timestamps.size > 0:
-                latest_timestamp['value'] = timestamps[-1]  # last sample time
+                timestamp_data['latest'] = timestamps[-1]  # last sample time
+                if timestamp_data['first'] is None:
+                    timestamp_data['first'] = timestamps[0]  # first sample time
 
             if save_path and data.size > 0:
                 np.save(outfile, data)
     except asyncio.CancelledError:
         print("Acquisition stopped.")
     finally:
-        save_as_fif(outfile, save_path, stream.info, annotation_list)
+        save_as_fif(outfile, save_path, stream.info, annotation_list, timestamp_data)
         outfile.close()
 
 
-async def websocket_server_async(annotation_list, latest_timestamp):
+async def websocket_server_async(annotation_list, timestamp_data):
     server = WebSocketServer()
 
     async def on_message(websocket, message):
-        timestamp = latest_timestamp['value']
+        timestamp = timestamp_data['latest']
         if timestamp is None:
             print("Warning: No timestamp available yet, annotation skipped.")
             return
@@ -97,17 +99,17 @@ async def websocket_server_async(annotation_list, latest_timestamp):
 async def main():
     stream = get_stream()
 
-    # Shared structure for annotations
-    latest_timestamp = {'value': None}
+    # Track both first and latest timestamps
+    timestamp_data = {'first': None, 'latest': None}
     annotation_list = []
 
     await asyncio.gather(
-        websocket_server_async(annotation_list, latest_timestamp),
-        acquisition_loop_async(stream, annotation_list, latest_timestamp, window_size=2, save_path='./recordings')
+        websocket_server_async(annotation_list, timestamp_data),
+        acquisition_loop_async(stream, annotation_list, timestamp_data, window_size=2, save_path='./recordings')
     )
 
 
-def save_as_fif(outfile, save_path, info, annotation_list):
+def save_as_fif(outfile, save_path, info, annotation_list, timestamp_data):
     _ = outfile.seek(0)
     full_data = []
 
@@ -122,24 +124,26 @@ def save_as_fif(outfile, save_path, info, annotation_list):
     raw = mne.io.RawArray(full_data, info=info)
 
     # Create MNE annotations
-    if annotation_list:
+    if annotation_list and timestamp_data['first'] is not None:
         onsets = []
         durations = []
         descriptions = []
 
+        first_timestamp = timestamp_data['first']
         for timestamp, description in annotation_list:
-            # Convert timestamp to relative time (in seconds)
-            onset = timestamp - raw.first_time
+            # Convert to relative time (in seconds) from recording start
+            onset = timestamp - first_timestamp
             onsets.append(onset)
             durations.append(0.0)  # or set if needed
             descriptions.append(description)
 
         raw.set_annotations(Annotations(onsets, durations, descriptions))
 
+    print(raw.annotations)
     os.makedirs(save_path, exist_ok=True)
     uid = str(uuid.uuid4())[-4:]
     raw.save(os.path.join(save_path, f'recording_{uid}.raw.fif'), overwrite=True)
-    print(f"Data saved to {save_path}")
+    print(f"Data saved to {save_path}/recording_{uid}.raw.fif")
 
 
 if __name__ == '__main__':
