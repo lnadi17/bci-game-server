@@ -2,6 +2,7 @@ import mne
 import numpy as np
 from collections import defaultdict
 
+
 class BCIDataProcessor:
     def __init__(self, recording_path, l_freq=None, h_freq=None, window_size=2, window_overlap=0.5):
         self.recording_path = recording_path
@@ -56,7 +57,8 @@ class BCIDataProcessor:
         for label, raw_list in self.filtered.items():
             self.epochs[label] = []
             for raw in raw_list:
-                epochs = mne.make_fixed_length_epochs(raw, duration=self.window_size, overlap=self.window_overlap, preload=True)
+                epochs = mne.make_fixed_length_epochs(raw, duration=self.window_size, overlap=self.window_overlap,
+                                                      preload=True)
                 self.epochs[label].append(epochs)
 
     def convert_epochs_to_array(self):
@@ -67,18 +69,35 @@ class BCIDataProcessor:
                 self.data_arrays[label].append(raw.get_data())
             self.data_arrays[label] = np.concatenate(self.data_arrays[label], axis=0)
 
-    def process(self):
+    def process(self, psds=False, nfft=250, channels=(0, 1, 2, 3, 4, 5, 6, 7)):
         self.load_data()
         self.extract_annotations()
         self.crop_raw_data()
         self.filter_cropped_data()
         self.epoch_filtered_data()
         self.convert_epochs_to_array()
+        # Select channels
+        for label, data_array in self.data_arrays.items():
+            self.data_arrays[label] = data_array[:, channels, :]
+        if psds:
+            self.convert_arrays_to_psds(nfft)
         return self.data_arrays
+
+    def convert_arrays_to_psds(self, nfft):
+        for label, data_array in self.data_arrays.items():
+            psds = []
+            # Compute the PSD for each epoch
+            for i in range(data_array.shape[0]):
+                psd, freqs = mne.time_frequency.psd_array_welch(data_array[i], self.raw.info['sfreq'], fmin=self.l_freq,
+                                                                fmax=self.h_freq, n_fft=nfft)
+                psds.append(psd)
+            self.data_arrays[label] = np.array(psds)
+            # self.data_arrays[label] = np.mean(self.data_arrays[label], axis=0)
+        return self.data_arrays
+
 
 if __name__ == "__main__":
     recording_path = 'recordings/recording_imagery1_gel.raw.fif'
     processor = BCIDataProcessor(recording_path, l_freq=7, h_freq=30, window_size=2, window_overlap=0.5)
     data_arrays = processor.process()
     print(data_arrays)
-
