@@ -77,7 +77,8 @@ class BCIDataProcessor:
         return self.data_arrays
 
 if __name__ == "__main__":
-    recording_path = 'recordings/recording_ssvep2_gel.raw.fif'
+    recording_path = 'recordings/recording_imagery1_gel.raw.fif'
     processor = BCIDataProcessor(recording_path, l_freq=7, h_freq=30, window_size=2, window_overlap=0.5)
     data_arrays = processor.process()
-    print(data_arrays['15.0'][0])
+    print(data_arrays)
+
