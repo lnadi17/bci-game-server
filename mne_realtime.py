@@ -92,6 +92,11 @@ async def acquisition_loop_async(stream, annotation_list, timestamp_data, window
         outfile.close()
 
 
+def process_realtime_data(data):
+    # Based on context, this function should use a specific model to process the data,
+    # and then send this information via websocket
+    pass
+
 def parse_message_into_annotation(message: str):
     """Parse JSON message with eventName and data fields."""
     try:
