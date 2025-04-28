@@ -20,7 +20,9 @@ class BCIDataProcessor:
 
     def load_data(self):
         self.raw = mne.io.read_raw_fif(self.recording_path, preload=True).rescale(1e-6)
+        montage = mne.channels.make_standard_montage("standard_1020")
         self.raw.info = mne.create_info(ch_names=self.raw.ch_names, sfreq=self.raw.info['sfreq'], ch_types='eeg')
+        self.raw.set_montage(montage)
 
     def extract_annotations(self):
         for i in range(len(self.raw.annotations) - 1):
