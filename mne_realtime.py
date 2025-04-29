@@ -76,6 +76,8 @@ async def acquisition_loop_async(window_size=2, save_path=None):
             # Update first timestamp (if needed)
             if TIMESTAMP_DATA['first'] is None:
                 TIMESTAMP_DATA['first'] = timestamps[0]
+                ANNOTATION_LIST.append((TIMESTAMP_DATA['first'], "startRecording"))
+
             # Update latest timestamp
             last_read_time = timestamps[-1]
             TIMESTAMP_DATA['latest'] = last_read_time
@@ -112,7 +114,7 @@ def parse_annotation(event_name, data):
         return event_name
 
 
-def handle_client_message(event_name, data):
+async def handle_client_message(event_name, data):
     global IS_PLAYING, CONTEXT, ANNOTATION_LIST, OUTFILE, STREAM
 
     # startTraining
@@ -122,16 +124,19 @@ def handle_client_message(event_name, data):
         ANNOTATION_LIST = []
         IS_PLAYING = False
         OUTFILE = TemporaryFile()
-        TIMESTAMP_DATA['first'] = None
         if TIMESTAMP_DATA['latest'] is None:
             print('Warning: No latest timestamp available yet, but training has started.')
             return
+        # Update first timestamp
+        TIMESTAMP_DATA['first'] = None
     # stopTraining
     elif event_name == "trainingFinished":
         if OUTFILE is None:
             print("Warning: No outfile available, training stopped without saving.")
             return
-        time.sleep(4)  # Wait for the last data to buffer be written (just in case)
+        # Add annotation for training finished
+        ANNOTATION_LIST.append((TIMESTAMP_DATA['latest'], "saveRecording"))
+        await asyncio.sleep(4)  # Wait for the last data to buffer be written (just in case)
         # Make sure nothing is written into OUTFILE anymore
         outfile = OUTFILE
         OUTFILE = None
@@ -171,7 +176,7 @@ async def websocket_server_async():
             event_name = parsed.get("eventName")
             data = parsed.get("data", {})
 
-            handle_client_message(event_name, data)
+            await handle_client_message(event_name, data)
 
             await SERVER.send_to_client(websocket, {"response": "Message received"})
         except:
