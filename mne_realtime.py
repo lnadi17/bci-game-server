@@ -29,10 +29,30 @@ TIMESTAMP_DATA = {'first': None, 'latest': None}
 OUTFILE = None
 
 
-def get_stream():
+def get_raw_stream():
     montage = mne.channels.make_standard_montage("standard_1020")
     stream = StreamLSL(bufsize=10, name='UnicornRecorderRawDataLSLStream')
-    stream.connect(processing_flags='all', acquisition_delay=0.001, timeout=10)
+    stream.connect(processing_flags='all', acquisition_delay=0.001, timeout=2)
+    stream.pick(picks=['0', '1', '2', '3', '4', '5', '6', '7'])
+    stream.rename_channels({
+        '0': 'Fz',
+        '1': 'C3',
+        '2': 'Cz',
+        '3': 'C4',
+        '4': 'Pz',
+        '5': 'PO7',
+        '6': 'Oz',
+        '7': 'PO8',
+    })
+    stream.set_montage(montage)
+    print(stream.info)
+    return stream
+
+
+def get_stream():
+    montage = mne.channels.make_standard_montage("standard_1020")
+    stream = StreamLSL(bufsize=10, name='UnicornRecorderLSLStream')
+    stream.connect(processing_flags='all', acquisition_delay=0.001, timeout=2)
     stream.pick(picks=['0', '1', '2', '3', '4', '5', '6', '7'])
     stream.rename_channels({
         '0': 'Fz',
@@ -52,7 +72,7 @@ def get_stream():
 def get_mock_stream():
     montage = mne.channels.make_standard_montage("standard_1020")
     stream = StreamLSL(bufsize=10, source_id='testStream')
-    stream.connect(processing_flags='all', acquisition_delay=0.001, timeout=10)
+    stream.connect(processing_flags='all', acquisition_delay=0.001, timeout=2)
     stream.set_montage(montage)
     print(stream.info)
     return stream
@@ -96,6 +116,8 @@ def process_realtime_data(data):
 
 
 def parse_annotation(event_name, data):
+    global ANNOTATION_LIST
+
     timestamp = TIMESTAMP_DATA['latest']
     if timestamp is None:
         print("Warning: No timestamp available yet, annotation skipped.")
@@ -111,7 +133,6 @@ def parse_annotation(event_name, data):
         ANNOTATION_LIST.append((timestamp, annotation))
     except KeyError as e:
         print(f"KeyError: {e} in data: {data}")
-        return event_name
 
 
 async def handle_client_message(event_name, data):
@@ -254,5 +275,5 @@ if __name__ == '__main__':
     # Declare server as a global variable
     SERVER = WebSocketServer()
     # Declare stream as a global variable
-    STREAM = get_mock_stream()
+    STREAM = get_stream()
     asyncio.run(main())
