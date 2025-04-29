@@ -5,6 +5,8 @@ import json
 import uuid
 from tempfile import TemporaryFile
 import multiprocessing
+
+from processing.RelaxModels import RelaxModel
 from websocket_server import WebSocketServer
 
 import numpy as np
@@ -27,6 +29,15 @@ ANNOTATION_LIST = []
 TIMESTAMP_DATA = {'first': None, 'latest': None}
 # Temporary file to store data
 OUTFILE = None
+# Global dictionary to store connected clients
+CONNECTED_CLIENTS = {}
+# Variable for trained models
+MODELS = {
+    "relax": None,
+    "imagery": None,
+    "ssvep": None
+}
+
 
 
 def get_raw_stream():
@@ -102,6 +113,10 @@ async def acquisition_loop_async(window_size=2, save_path=None):
             last_read_time = timestamps[-1]
             TIMESTAMP_DATA['latest'] = last_read_time
 
+            # Use realtime processing if the game is playing
+            if IS_PLAYING:
+                process_realtime_data(data)
+
             # Write to OUTFILE if possible
             if save_path and data.size > 0 and OUTFILE is not None:
                 np.save(OUTFILE, data)
@@ -110,10 +125,22 @@ async def acquisition_loop_async(window_size=2, save_path=None):
 
 
 def process_realtime_data(data):
-    # TODO: Based on context, this function should use a specific model to process the data,
-    # and then send this information via websocket
-    pass
+    # TODO: Based on context, this function should use a specific model to process the data
+    # For now, we just use relax context and use the relax model to process the data
+    relax_model = MODELS["relax"]
+    if relax_model is None:
+        print("Warning: No relax model available, cannot process data.")
+        return
 
+    # Optional: export data to recordings dir
+    uid = str(uuid.uuid4())[-4:]
+    np.save(f'./recordings/data_focus_{uid}', data)
+
+    relax_model: RelaxModel
+    prediction = relax_model.predict(data)
+    print(f"Prediction: {prediction}")
+    # Send the prediction to all clients
+    asyncio.create_task(send_to_all_clients({"currentLabel": prediction}))
 
 def parse_annotation(event_name, data):
     global ANNOTATION_LIST
@@ -164,12 +191,23 @@ async def handle_client_message(event_name, data):
         # Save the data, close the file afterwards
         save_path = save_as_fif(outfile, save_path='./recordings', info=STREAM.info)
         outfile.close()
-        # TODO: Train the model with the data here
-        #
+        if CONTEXT is None:
+            print("Warning: No context available, training finished but model will not be trained.")
+            return
+        # TODO: Train the model based on the context
+        # CSP Model trains it on the current data, old model trains it on the previous data
+        # relax_model = RelaxModel("relax_csp_model", recording_path=save_path)
+        # relax_model = RelaxModel("relax_old_model", recording_path=save_path)
+        # relax_model.load_model()
+        # MODELS["relax"] = relax_model
+        # print(f"Model trained!")
     elif event_name == "startPlaying":
         IS_PLAYING = True
-        # TODO: Start sending messages from realtime model predictions
-        pass
+        # TODO: Remove this
+        print("Loaded temporary model")
+        relax_model = RelaxModel("relax_old_model")
+        relax_model.load_model()
+        MODELS["relax"] = relax_model
     elif event_name == "setContext":
         context = data.get("context")
         if context in ["ssvep", "imagery", "relax"]:
@@ -205,12 +243,15 @@ async def websocket_server_async():
             await SERVER.send_to_client(websocket, {"error": "Invalid message format"})
             return
 
-    # Create async callbacks
     async def on_connect(websocket, path):
-        print(f"Client connected: {id(websocket)}")
+        client_id = id(websocket)
+        CONNECTED_CLIENTS[client_id] = websocket
+        print(f"Client connected: {client_id}")
 
     async def on_disconnect(websocket):
-        print(f"Client disconnected: {id(websocket)}")
+        client_id = id(websocket)
+        CONNECTED_CLIENTS.pop(client_id, None)
+        print(f"Client disconnected: {client_id}")
 
     SERVER.on_connect(on_connect).on_message(on_message).on_disconnect(on_disconnect)
 
@@ -229,6 +270,9 @@ async def main():
         acquisition_loop_async(window_size=2, save_path='./recordings')
     )
 
+async def send_to_all_clients(message):
+    for ws in CONNECTED_CLIENTS.values():
+        await SERVER.send_to_client(ws, message)
 
 def save_as_fif(outfile, save_path, info):
     _ = outfile.seek(0)
@@ -275,5 +319,5 @@ if __name__ == '__main__':
     # Declare server as a global variable
     SERVER = WebSocketServer()
     # Declare stream as a global variable
-    STREAM = get_stream()
+    STREAM = get_raw_stream()
     asyncio.run(main())
