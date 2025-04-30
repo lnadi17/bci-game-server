@@ -4,12 +4,13 @@ from collections import defaultdict
 
 
 class BCIDataProcessor:
-    def __init__(self, recording_path, l_freq=None, h_freq=None, window_size=2, window_overlap=0.5):
+    def __init__(self, recording_path, l_freq=None, h_freq=None, window_size=2, window_overlap=0.5, rescale=True):
         self.recording_path = recording_path
         self.l_freq = l_freq
         self.h_freq = h_freq
         self.window_size = window_size
         self.window_overlap = window_overlap
+        self.rescale = rescale
         self.raw = None
         self.label_onsets = defaultdict(list)
         self.stimulus_duration = None
@@ -19,7 +20,9 @@ class BCIDataProcessor:
         self.data_arrays = None
 
     def load_data(self):
-        self.raw = mne.io.read_raw_fif(self.recording_path, preload=True).rescale(1e-6)
+        self.raw = mne.io.read_raw_fif(self.recording_path, preload=True)
+        if self.rescale:
+            self.raw.rescale(1e-6)
         montage = mne.channels.make_standard_montage("standard_1020")
         self.raw.info = mne.create_info(ch_names=self.raw.ch_names, sfreq=self.raw.info['sfreq'], ch_types='eeg')
         self.raw.set_montage(montage)
@@ -51,7 +54,7 @@ class BCIDataProcessor:
         for label, raw_list in self.cropped.items():
             self.filtered[label] = []
             for raw in raw_list:
-                filtered = raw.copy().filter(self.l_freq, self.h_freq)
+                filtered = raw.copy().filter(self.l_freq, self.h_freq).notch_filter(freqs=[50])
                 self.filtered[label].append(filtered)
 
     def epoch_filtered_data(self):
