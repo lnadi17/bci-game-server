@@ -4,13 +4,14 @@ from collections import defaultdict
 
 
 class BCIDataProcessor:
-    def __init__(self, recording_path, l_freq=None, h_freq=None, window_size=2, window_overlap=0.5, rescale=True):
+    def __init__(self, recording_path, l_freq=None, h_freq=None, window_size=2, window_overlap=0.5, rescale=True, filter_method='iir'):
         self.recording_path = recording_path
         self.l_freq = l_freq
         self.h_freq = h_freq
         self.window_size = window_size
         self.window_overlap = window_overlap
         self.rescale = rescale
+        self.filter_method = filter_method
         self.raw = None
         self.label_onsets = defaultdict(list)
         self.stimulus_duration = None
@@ -54,7 +55,7 @@ class BCIDataProcessor:
         for label, raw_list in self.cropped.items():
             self.filtered[label] = []
             for raw in raw_list:
-                filtered = raw.copy().filter(self.l_freq, self.h_freq).notch_filter(freqs=[50])
+                filtered = raw.copy().filter(self.l_freq, self.h_freq, method=self.filter_method).notch_filter(freqs=[50])
                 self.filtered[label].append(filtered)
 
     def epoch_filtered_data(self):
