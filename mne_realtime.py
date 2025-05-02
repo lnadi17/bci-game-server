@@ -7,6 +7,8 @@ from tempfile import TemporaryFile
 import multiprocessing
 
 from processing.RealtimeRelaxModel import RelaxModel
+from processing.RealtimeSSVEPModel import SSVEPModel
+from processing.RealtimeImageryModel import ImageryModel
 from websocket_server import WebSocketServer
 
 import numpy as np
@@ -37,7 +39,12 @@ MODELS = {
     "imagery": None,
     "ssvep": None
 }
-
+# Variable for latest recordings for different contexts
+LATEST_RECORDINGS = {
+    "relax": None,
+    "imagery": None,
+    "ssvep": None
+}
 
 
 def get_raw_stream():
@@ -125,22 +132,35 @@ async def acquisition_loop_async(window_size=2, save_path=None):
 
 
 def process_realtime_data(data):
-    # TODO: Based on context, this function should use a specific model to process the data
-    # For now, we just use relax context and use the relax model to process the data
-    relax_model = MODELS["relax"]
-    if relax_model is None:
-        print("Warning: No relax model available, cannot process data.")
+    # Based on context, load the model
+    if CONTEXT is None:
+        print("Warning: No context available, cannot process data.")
+        return
+
+    if CONTEXT == "ssvep":
+        # Load the SSVEP model
+        model = MODELS.get("ssvep")
+    elif CONTEXT == "imagery":
+        # Load the Imagery model
+        model = MODELS.get("imagery")
+    elif CONTEXT == "relax":
+        # Load the Relax model
+        model = MODELS.get("relax")
+    else:
+        print(f"Unknown context: {CONTEXT}")
         return
 
     # Optional: export data to recordings dir
-    uid = str(uuid.uuid4())[-4:]
-    np.save(f'./recordings/data_focus_{uid}', data)
+    # uid = str(uuid.uuid4())[-4:]
+    # np.save(f'./recordings/data_focus_{uid}', data)
 
-    relax_model: RelaxModel
-    prediction = relax_model.predict(data)
+    # Make prediction for the data chunk
+    prediction = model.predict(data)
     print(f"Prediction: {prediction}")
+
     # Send the prediction to all clients
     asyncio.create_task(send_to_all_clients({"currentLabel": prediction}))
+
 
 def parse_annotation(event_name, data):
     global ANNOTATION_LIST
@@ -165,7 +185,6 @@ def parse_annotation(event_name, data):
 async def handle_client_message(event_name, data):
     global IS_PLAYING, CONTEXT, ANNOTATION_LIST, OUTFILE, STREAM
 
-    # startTraining
     if event_name == "trainingStarted":
         training_type = data.get("trainingType")
         CONTEXT = training_type
@@ -177,37 +196,81 @@ async def handle_client_message(event_name, data):
             return
         # Update first timestamp
         TIMESTAMP_DATA['first'] = None
-    # stopTraining
     elif event_name == "trainingFinished":
         if OUTFILE is None:
             print("Warning: No outfile available, training stopped without saving.")
             return
+
         # Add annotation for training finished
         ANNOTATION_LIST.append((TIMESTAMP_DATA['latest'], "saveRecording"))
         await asyncio.sleep(4)  # Wait for the last data to buffer be written (just in case)
+
         # Make sure nothing is written into OUTFILE anymore
         outfile = OUTFILE
         OUTFILE = None
+
         # Save the data, close the file afterwards
-        save_path = save_as_fif(outfile, save_path='./recordings', info=STREAM.info)
+        save_path, uid = save_as_fif(outfile, save_path='./recordings', info=STREAM.info)
         outfile.close()
+
+        # Start training the model
         if CONTEXT is None:
             print("Warning: No context available, training finished but model will not be trained.")
             return
-        # TODO: Train the model based on the context
-        # CSP Model trains it on the current data, old model trains it on the previous data
-        # relax_model = RelaxModel("relax_csp_model", recording_path=save_path)
-        # relax_model = RelaxModel("relax_old_model", recording_path=save_path)
-        # relax_model.load_model()
-        # MODELS["relax"] = relax_model
-        # print(f"Model trained!")
+
+        # Save the path to the latest recordings
+        LATEST_RECORDINGS[CONTEXT] = save_path
+
+        # Train the model using the latest recording for the context
+        # By default, model is 'auto', and path is latest
+        if CONTEXT == "ssvep":
+            model = SSVEPModel(model_variant='auto', data_path=LATEST_RECORDINGS[CONTEXT])
+        elif CONTEXT == "imagery":
+            model = ImageryModel(model_variant='auto', data_path=LATEST_RECORDINGS[CONTEXT])
+        elif CONTEXT == "relax":
+            model = RelaxModel(model_variant='auto', data_path=LATEST_RECORDINGS[CONTEXT])
+        else:
+            print(f"Unknown context: {CONTEXT}")
+            return
+
+        # Don't forget to load model (this does the actual training)
+        model.load_model()
+        MODELS[CONTEXT] = model
+        print(f"Important: Model {CONTEXT} trained with data from {LATEST_RECORDINGS[CONTEXT]}!")
+        print(f"Model accuracy: {model.accuracy}")
+        print(f"Confusion matrix: {model.confusion_matrix}")
     elif event_name == "startPlaying":
         IS_PLAYING = True
-        # TODO: Remove this
-        print("Loaded temporary model")
-        relax_model = RelaxModel("relax_old_model")
-        relax_model.load_model()
-        MODELS["relax"] = relax_model
+
+        # Load the model based on the data received, it's either 'auto' or the name of the model
+        # Same for the data_path, it can be either 'auto' or the path to the data
+        model_name = data.get("modelName")
+        data_path = data.get("dataPath")
+
+        if CONTEXT is None:
+            print("Warning: No context available, cannot start playing.")
+            return
+
+        if data_path == 'auto':
+            # Use the latest recording for the context
+            data_path = LATEST_RECORDINGS.get(CONTEXT)
+
+        if CONTEXT == "ssvep":
+            model = SSVEPModel(model_variant=model_name, data_path=data_path)
+        elif CONTEXT == "imagery":
+            model = ImageryModel(model_variant=model_name, data_path=data_path)
+        elif CONTEXT == "relax":
+            model = RelaxModel(model_variant=model_name, data_path=data_path)
+        else:
+            print(f"Unknown context: {CONTEXT}")
+            return
+
+        # Retrain the model on the latest recording
+        model.load_model()
+        MODELS[CONTEXT] = model
+        print(f"Important: Model {CONTEXT} loaded with data from {data_path}!")
+        print(f"Model accuracy: {model.accuracy}")
+        print(f"Confusion matrix: {model.confusion_matrix}")
     elif event_name == "setContext":
         context = data.get("context")
         if context in ["ssvep", "imagery", "relax"]:
@@ -227,7 +290,8 @@ async def websocket_server_async():
 
     async def on_message(websocket, message):
         timestamp = TIMESTAMP_DATA['latest']
-        print(f"Message from {id(websocket)} at {timestamp}: {message}")
+        # print(f"Message from {id(websocket)} at {timestamp}: {message}")
+        print(f"Message from {id(websocket)} at {timestamp}")
 
         # Extract the required fields
         try:
@@ -237,7 +301,7 @@ async def websocket_server_async():
 
             await handle_client_message(event_name, data)
 
-            await SERVER.send_to_client(websocket, {"response": "Message received"})
+            # await SERVER.send_to_client(websocket, {"response": "Message received"})
         except:
             print(f"Error parsing message: {message}")
             await SERVER.send_to_client(websocket, {"error": "Invalid message format"})
@@ -270,9 +334,11 @@ async def main():
         acquisition_loop_async(window_size=2, save_path='./recordings')
     )
 
+
 async def send_to_all_clients(message):
     for ws in CONNECTED_CLIENTS.values():
         await SERVER.send_to_client(ws, message)
+
 
 def save_as_fif(outfile, save_path, info):
     _ = outfile.seek(0)
@@ -312,7 +378,8 @@ def save_as_fif(outfile, save_path, info):
     full_save_path = os.path.join(save_path, f'recording_{uid}.raw.fif')
     raw.save(full_save_path, overwrite=True)
     print(f"Data saved to {full_save_path}")
-    return full_save_path
+
+    return full_save_path, uid
 
 
 if __name__ == '__main__':

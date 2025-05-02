@@ -4,7 +4,7 @@ from collections import defaultdict
 
 
 class BCIDataProcessor:
-    def __init__(self, recording_path, l_freq=None, h_freq=None, window_size=2, window_overlap=0.5, rescale=True, filter_method='iir'):
+    def __init__(self, recording_path, l_freq=None, h_freq=None, window_size=2, window_overlap=0.5, rescale=True, filter_method='iir', use_notch=False):
         self.recording_path = recording_path
         self.l_freq = l_freq
         self.h_freq = h_freq
@@ -12,6 +12,7 @@ class BCIDataProcessor:
         self.window_overlap = window_overlap
         self.rescale = rescale
         self.filter_method = filter_method
+        self.use_notch = use_notch
         self.raw = None
         self.label_onsets = defaultdict(list)
         self.stimulus_duration = None
@@ -55,7 +56,9 @@ class BCIDataProcessor:
         for label, raw_list in self.cropped.items():
             self.filtered[label] = []
             for raw in raw_list:
-                filtered = raw.copy().filter(self.l_freq, self.h_freq, method=self.filter_method).notch_filter(freqs=[50])
+                filtered = raw.copy().filter(self.l_freq, self.h_freq, method=self.filter_method)
+                if self.use_notch:
+                    filtered.notch_filter(freqs=[50])
                 self.filtered[label].append(filtered)
 
     def epoch_filtered_data(self):
@@ -88,6 +91,31 @@ class BCIDataProcessor:
         if psds:
             self.convert_arrays_to_psds(nfft)
         return self.data_arrays
+
+    def process_chunk(self, chunk):
+        """
+        Does the same processing steps as process() but for a single chunk of data.
+        It is assumed that n_times is equal to the window_size.
+        :param chunk: (n_channels, n_times)
+        :return: data_array: (1, n_channels, n_times)
+        """
+        # Create raw
+        sfreq = self.raw.info['sfreq']
+        ch_names = self.raw.ch_names
+        info = mne.create_info(ch_names=ch_names, sfreq=sfreq, ch_types='eeg')
+        raw = mne.io.RawArray(chunk, info)
+        if self.rescale:
+            raw.rescale(1e-6)
+
+        # Apply filtering
+        raw_filtered = raw.filter(self.l_freq, self.h_freq, method=self.filter_method)
+        if self.use_notch:
+            raw_filtered.notch_filter(freqs=[50])
+
+        # Reshape data
+        data_array = raw_filtered.get_data()
+        out = data_array[np.newaxis, :, :]
+        return out
 
     def convert_arrays_to_psds(self, nfft):
         for label, data_array in self.data_arrays.items():
