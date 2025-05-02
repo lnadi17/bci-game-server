@@ -22,7 +22,7 @@ class RelaxModel:
     def load_model(self):
         if self.model_name == 'auto':
             self.model = self._load_ts_model()
-        elif self.model_name == 'csp':
+        elif self.model_name == 'ts':
             self.model = self._load_ts_model()
         else:
             raise ValueError(f"Model variant '{self.model_name}' is not supported.")
