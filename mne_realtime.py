@@ -6,7 +6,7 @@ import uuid
 from tempfile import TemporaryFile
 import multiprocessing
 
-from processing.RelaxModels import RelaxModel
+from processing.RealtimeRelaxModel import RelaxModel
 from websocket_server import WebSocketServer
 
 import numpy as np
