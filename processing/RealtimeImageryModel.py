@@ -1,32 +1,63 @@
+import numpy as np
+from pyriemann.classification import MDM
+from pyriemann.estimation import Covariances
+from sklearn.metrics import confusion_matrix
+from sklearn.pipeline import Pipeline
+
+from processing.preprocessing import BCIDataProcessor
+
+
 class ImageryModel:
-    available_models = ('auto', 'csp')
+    available_models = ('auto', 'mdm')
+    accuracy = 0
+    confusion_matrix = None
 
     def __init__(self, model_variant: str, data_path: str = None):
         if model_variant not in self.available_models:
             raise ValueError(f"Model variant '{model_variant}' is not supported. Choose from {self.available_models}.")
         self.model_name = model_variant
-        self.recording_path = data_path
+        self.data_path = data_path
         self.model = None
 
     def load_model(self):
-        # Load the model based on the model name
-        if self.model_name == "model1":
-            self.model = self._load_model1()
-        elif self.model_name == "model2":
-            self.model = self._load_model2()
+        if self.model_name == 'auto':
+            self.model = self._load_mdm_model()
+        elif self.model_name == 'mdm':
+            self.model = self._load_mdm_model()
         else:
-            raise ValueError(f"Model {self.model_name} not recognized.")
+            raise ValueError(f"Model variant '{self.model_name}' is not supported.")
 
-    def _load_model1(self):
-        # Load model1
-        pass
+        # Set input and output shapes
+        self.input_shape = (8, 500)
 
-    def _load_model2(self):
-        # Load model2
-        pass
+    def _load_mdm_model(self):
+        # Define variables found to work the best with grid search
+        rescale = True
+        window_size = 2
+        window_overlap = 0.17
+        filter_method = 'iir'
+        l_freq, h_freq = 10, 20
+
+        self.processor = BCIDataProcessor(self.data_path, l_freq=l_freq, h_freq=h_freq, window_size=window_size,
+                                          window_overlap=window_overlap, rescale=rescale, filter_method=filter_method)
+        data = self.processor.process()
+        data = {label: data[label] for label in data.keys() if label in ['left_hand', 'right_hand']}
+
+        X = np.concatenate(list(data.values()), axis=0)
+        y = np.concatenate([[label] * data[label].shape[0] for label in data.keys()])  # (samples,)
+
+        clf = Pipeline(steps=[('cov', Covariances(estimator='oas')),
+                              ('mdm', MDM(metric={'distance': 'riemann', 'mean': 'logeuclid'}))])
+        clf.fit(X, y)
+
+        y_pred = clf.predict(X)
+        self.accuracy = np.mean(y_pred == y)
+        self.confusion_matrix = confusion_matrix(y, y_pred)
+
+        return clf
 
     def predict(self, data):
-        # Make predictions using the loaded model
         if self.model is None:
             raise ValueError("Model not loaded. Call load_model() first.")
-        return self.model.predict(data)
+        processed_chunk = self.processor.process_chunk(data)
+        return self.model.predict(processed_chunk)[0]
