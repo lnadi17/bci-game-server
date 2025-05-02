@@ -1,9 +1,7 @@
 import numpy as np
-from pyriemann.classification import TSClassifier
-from pyriemann.estimation import Covariances
 from sklearn.cross_decomposition import CCA
 from sklearn.metrics import confusion_matrix
-from sklearn.pipeline import Pipeline
+
 from processing.preprocessing import BCIDataProcessor
 
 
@@ -68,9 +66,10 @@ class SSVEPModel:
     accuracy = 0
     confusion_matrix = None
 
-    def __init__(self, model_variant: str, data_path: str = None):
+    def __init__(self, freqs, model_variant: str, data_path: str = None):
         if model_variant not in self.available_models:
             raise ValueError(f"Model variant '{model_variant}' is not supported. Choose from {self.available_models}.")
+        self.freqs = freqs
         self.model_name = model_variant
         self.data_path = data_path
         self.model = None
@@ -78,7 +77,7 @@ class SSVEPModel:
     def load_model(self):
         if self.model_name == 'auto':
             self.model = self._load_cca_model()
-        elif self.model_name == 'ts':
+        elif self.model_name == 'cca':
             self.model = self._load_cca_model()
         else:
             raise ValueError(f"Model variant '{self.model_name}' is not supported.")
@@ -89,9 +88,9 @@ class SSVEPModel:
     def _load_cca_model(self):
         rescale = True
         window_size = 2
-        window_overlap = 0.33
+        window_overlap = 0
         filter_method = 'iir'
-        l_freq, h_freq = 10, 20
+        l_freq, h_freq = 6, 32
 
         self.processor = BCIDataProcessor(self.data_path, l_freq=l_freq, h_freq=h_freq, window_size=window_size,
                                           window_overlap=window_overlap, rescale=rescale, filter_method=filter_method)
@@ -100,7 +99,8 @@ class SSVEPModel:
         X = np.concatenate(list(data.values()), axis=0)
         y = np.concatenate([[label] * data[label].shape[0] for label in data.keys()])  # (samples,)
 
-        clf = CCAClassifier(sampling_rate=250, frequencies=(8, 11, 15), num_targets=3, n_components=1, harmonics=1)
+        clf = CCAClassifier(sampling_rate=250, frequencies=self.freqs, num_targets=len(self.freqs),
+                            n_components=1, harmonics=1)
         clf.fit(X, y)
 
         y_pred = clf.predict(X)

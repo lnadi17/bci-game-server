@@ -20,6 +20,9 @@ from mne_lsl.stream import StreamLSL
 
 set_log_level("WARNING")
 
+# TODO
+SSVEP_FREQS = [8, 11, 14]
+
 # Boolean that indicates if the game is playing or not
 IS_PLAYING = None
 # Context variable to identify which model to train or use (while playing)
@@ -224,7 +227,7 @@ async def handle_client_message(event_name, data):
         # Train the model using the latest recording for the context
         # By default, model is 'auto', and path is latest
         if CONTEXT == "ssvep":
-            model = SSVEPModel(model_variant='auto', data_path=LATEST_RECORDINGS[CONTEXT])
+            model = SSVEPModel(SSVEP_FREQS, model_variant='auto', data_path=LATEST_RECORDINGS[CONTEXT])
         elif CONTEXT == "imagery":
             model = ImageryModel(model_variant='auto', data_path=LATEST_RECORDINGS[CONTEXT])
         elif CONTEXT == "relax":
@@ -256,7 +259,7 @@ async def handle_client_message(event_name, data):
             data_path = LATEST_RECORDINGS.get(CONTEXT)
 
         if CONTEXT == "ssvep":
-            model = SSVEPModel(model_variant=model_name, data_path=data_path)
+            model = SSVEPModel(SSVEP_FREQS, model_variant=model_name, data_path=data_path)
         elif CONTEXT == "imagery":
             model = ImageryModel(model_variant=model_name, data_path=data_path)
         elif CONTEXT == "relax":
