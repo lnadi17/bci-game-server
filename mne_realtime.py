@@ -21,7 +21,7 @@ from mne_lsl.stream import StreamLSL
 set_log_level("WARNING")
 
 # TODO
-SSVEP_FREQS = [8, 11, 14]
+SSVEP_FREQS = [8, 11, 15, 17]
 
 # Boolean that indicates if the game is playing or not
 IS_PLAYING = None
@@ -140,18 +140,7 @@ def process_realtime_data(data):
         print("Warning: No context available, cannot process data.")
         return
 
-    if CONTEXT == "ssvep":
-        # Load the SSVEP model
-        model = MODELS.get("ssvep")
-    elif CONTEXT == "imagery":
-        # Load the Imagery model
-        model = MODELS.get("imagery")
-    elif CONTEXT == "relax":
-        # Load the Relax model
-        model = MODELS.get("relax")
-    else:
-        print(f"Unknown context: {CONTEXT}")
-        return
+    model = MODELS[CONTEXT]
 
     # Optional: export data to recordings dir
     # uid = str(uuid.uuid4())[-4:]
@@ -227,7 +216,7 @@ async def handle_client_message(event_name, data):
         # Train the model using the latest recording for the context
         # By default, model is 'auto', and path is latest
         if CONTEXT == "ssvep":
-            model = SSVEPModel(SSVEP_FREQS, model_variant='auto', data_path=LATEST_RECORDINGS[CONTEXT])
+            model = SSVEPModel(SSVEP_FREQS, model_variant='auto', data_path='')
         elif CONTEXT == "imagery":
             model = ImageryModel(model_variant='auto', data_path=LATEST_RECORDINGS[CONTEXT])
         elif CONTEXT == "relax":
@@ -259,7 +248,7 @@ async def handle_client_message(event_name, data):
             data_path = LATEST_RECORDINGS.get(CONTEXT)
 
         if CONTEXT == "ssvep":
-            model = SSVEPModel(SSVEP_FREQS, model_variant=model_name, data_path=data_path)
+            model = SSVEPModel(SSVEP_FREQS, model_variant=model_name, data_path='')
         elif CONTEXT == "imagery":
             model = ImageryModel(model_variant=model_name, data_path=data_path)
         elif CONTEXT == "relax":
@@ -305,8 +294,9 @@ async def websocket_server_async():
             await handle_client_message(event_name, data)
 
             # await SERVER.send_to_client(websocket, {"response": "Message received"})
-        except:
+        except Exception as e:
             print(f"Error parsing message: {message}")
+            print(e)
             await SERVER.send_to_client(websocket, {"error": "Invalid message format"})
             return
 

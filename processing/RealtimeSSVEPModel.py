@@ -84,6 +84,7 @@ class SSVEPModel:
 
         # Set input and output shapes
         self.input_shape = (8, 500)
+        print('Model loaded successfully.')
 
     def _load_cca_model(self):
         rescale = True
@@ -92,21 +93,26 @@ class SSVEPModel:
         filter_method = 'iir'
         l_freq, h_freq = 6, 32
 
-        self.processor = BCIDataProcessor(self.data_path, l_freq=l_freq, h_freq=h_freq, window_size=window_size,
-                                          window_overlap=window_overlap, rescale=rescale, filter_method=filter_method)
-        data = self.processor.process()
-
-        X = np.concatenate(list(data.values()), axis=0)
-        y = np.concatenate([[label] * data[label].shape[0] for label in data.keys()])  # (samples,)
-
         clf = CCAClassifier(sampling_rate=250, frequencies=self.freqs, num_targets=len(self.freqs),
                             n_components=1, harmonics=1)
-        clf.fit(X, y)
 
-        y_pred = clf.predict(X)
+        # TODO: data_path is hardcoded because process_chunk needs that processor.process() is called first
+        self.data_path = 'recordings/recording_ssvep1.raw.fif'
+        self.processor = BCIDataProcessor(self.data_path, l_freq=l_freq, h_freq=h_freq, window_size=window_size,
+                                          window_overlap=window_overlap, rescale=rescale, filter_method=filter_method)
+        # Only "fit" if data_path is provided
+        if self.data_path != '':
+            data = self.processor.process()
 
-        self.accuracy = np.mean(y_pred == y)
-        self.confusion_matrix = confusion_matrix(y, y_pred)
+            X = np.concatenate(list(data.values()), axis=0)
+            y = np.concatenate([[label] * data[label].shape[0] for label in data.keys()])  # (samples,)
+
+            clf.fit(X, y)
+
+            y_pred = clf.predict(X)
+
+            self.accuracy = np.mean(y_pred == y)
+            self.confusion_matrix = confusion_matrix(y, y_pred)
 
         return clf
 
