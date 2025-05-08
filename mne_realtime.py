@@ -21,7 +21,7 @@ from mne_lsl.stream import StreamLSL
 set_log_level("WARNING")
 
 # TODO
-SSVEP_FREQS = [8, 11, 15, 17]
+SSVEP_FREQS = [8, 11, 15]
 
 # Boolean that indicates if the game is playing or not
 IS_PLAYING = None
@@ -238,6 +238,7 @@ async def handle_client_message(event_name, data):
         # Same for the data_path, it can be either 'auto' or the path to the data
         model_name = data.get("modelName")
         data_path = data.get("dataPath")
+        print(data_path)
 
         if CONTEXT is None:
             print("Warning: No context available, cannot start playing.")
@@ -376,8 +377,11 @@ def save_as_fif(outfile, save_path, info):
 
 
 if __name__ == '__main__':
+    # TODO: This is hardcoded
+    MODELS["ssvep"] = SSVEPModel(SSVEP_FREQS, model_variant='auto', data_path='')
+    MODELS["ssvep"].load_model()
     # Declare server as a global variable
     SERVER = WebSocketServer()
     # Declare stream as a global variable
-    STREAM = get_raw_stream()
+    STREAM = get_stream()
     asyncio.run(main())
