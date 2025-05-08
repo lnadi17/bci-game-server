@@ -3,6 +3,8 @@
 
 A real-time Brain-Computer Interface (BCI) game server for EEG-based experiments and games. This server supports real-time EEG data acquisition, annotation, model training, and prediction using SSVEP, motor imagery, and relaxation paradigms. Communication with clients is handled via WebSockets.
 
+<img alt="img1.png" src="img1.png" width="350"/>
+
 ## Features
 
 - **Real-time EEG acquisition** via LSL streams (Unicorn hardware expected)
