@@ -20,7 +20,7 @@ from mne_lsl.stream import StreamLSL
 
 set_log_level("WARNING")
 
-# TODO
+# TODO: Frequencies are hardcoded
 SSVEP_FREQS = [8, 11, 15]
 
 # Boolean that indicates if the game is playing or not
@@ -377,9 +377,10 @@ def save_as_fif(outfile, save_path, info):
 
 
 if __name__ == '__main__':
-    # TODO: This is hardcoded
+    # TODO: SSEVP model is hardcoded
     MODELS["ssvep"] = SSVEPModel(SSVEP_FREQS, model_variant='auto', data_path='')
     MODELS["ssvep"].load_model()
+
     # Declare server as a global variable
     SERVER = WebSocketServer()
     # Declare stream as a global variable
