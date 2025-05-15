@@ -114,7 +114,7 @@ All models use the `processing/preprocessing.py` pipeline for filtering, epochin
 
 ## License
 
-MIT License
+GPL-2.0 License
 
 ## Acknowledgements
 
