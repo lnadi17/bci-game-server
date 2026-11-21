@@ -102,6 +102,7 @@ def get_mock_stream():
 async def acquisition_loop_async(window_size=2, save_path=None):
     global OUTFILE, TIMESTAMP_DATA, STREAM
     last_read_time = None
+    window_index = 0
 
     try:
         while True:
@@ -114,6 +115,43 @@ async def acquisition_loop_async(window_size=2, save_path=None):
                 continue
 
             data, timestamps = STREAM.get_data(winsize=window_size)
+            previous_read_time = last_read_time
+            window_index += 1
+
+            sampling_rate = float(STREAM.info["sfreq"])
+            duration = timestamps[-1] - timestamps[0] if len(timestamps) > 1 else 0.0
+            if previous_read_time is None:
+                timestamp_gap = "first"
+            else:
+                timestamp_gap = f"{(timestamps[0] - previous_read_time) * 1000:.3f}ms"
+
+            non_finite_count = int(data.size - np.count_nonzero(np.isfinite(data)))
+            flat_channel_count = int(sum(np.ptp(channel) == 0 for channel in data))
+            buffer_after = STREAM.n_new_samples
+
+            print(
+                f"[LSL] window={window_index:06d} context={CONTEXT or 'none'} "
+                f"playing={bool(IS_PLAYING)} shape={data.shape} sfreq={sampling_rate:.2f}Hz "
+                f"duration={duration:.3f}s gap={timestamp_gap} "
+                f"buffer_before={winsize_samples} buffer_after={buffer_after} "
+                f"non_finite={non_finite_count} flat_channels={flat_channel_count}",
+                flush=True,
+            )
+
+            channel_names = STREAM.info["ch_names"]
+            channel_stats = []
+            for channel_index, channel in enumerate(data):
+                finite_values = channel[np.isfinite(channel)]
+                channel_name = channel_names[channel_index] if channel_index < len(channel_names) else str(channel_index)
+                if finite_values.size == 0:
+                    channel_stats.append(f"{channel_name}[no finite samples]")
+                else:
+                    channel_stats.append(
+                        f"{channel_name}[min={np.min(finite_values):.3e} "
+                        f"max={np.max(finite_values):.3e} std={np.std(finite_values):.3e}]"
+                    )
+            print(f"[LSL] channels {' '.join(channel_stats)}", flush=True)
+
             # Update first timestamp (if needed)
             if TIMESTAMP_DATA['first'] is None:
                 TIMESTAMP_DATA['first'] = timestamps[0]
@@ -137,10 +175,13 @@ async def acquisition_loop_async(window_size=2, save_path=None):
 def process_realtime_data(data):
     # Based on context, load the model
     if CONTEXT is None:
-        print("Warning: No context available, cannot process data.")
+        print("[MODEL] skipped: no gameplay context has been selected", flush=True)
         return
 
-    model = MODELS[CONTEXT]
+    model = MODELS.get(CONTEXT)
+    if model is None:
+        print(f"[MODEL] skipped: no model is loaded for context={CONTEXT}", flush=True)
+        return
 
     # Optional: export data to recordings dir
     # uid = str(uuid.uuid4())[-4:]
@@ -148,7 +189,7 @@ def process_realtime_data(data):
 
     # Make prediction for the data chunk
     prediction = model.predict(data)
-    print(f"Prediction: {prediction}")
+    print(f"[MODEL] context={CONTEXT} prediction={prediction}", flush=True)
 
     # Send the prediction to all clients
     asyncio.create_task(send_to_all_clients({"currentLabel": prediction}))
@@ -183,12 +224,14 @@ async def handle_client_message(event_name, data):
         ANNOTATION_LIST = []
         IS_PLAYING = False
         OUTFILE = TemporaryFile()
+        print(f"[GAME] training started context={CONTEXT}", flush=True)
         if TIMESTAMP_DATA['latest'] is None:
             print('Warning: No latest timestamp available yet, but training has started.')
             return
         # Update first timestamp
         TIMESTAMP_DATA['first'] = None
     elif event_name == "trainingFinished":
+        print(f"[GAME] training finishing context={CONTEXT}", flush=True)
         if OUTFILE is None:
             print("Warning: No outfile available, training stopped without saving.")
             return
@@ -238,7 +281,11 @@ async def handle_client_message(event_name, data):
         # Same for the data_path, it can be either 'auto' or the path to the data
         model_name = data.get("modelName")
         data_path = data.get("dataPath")
-        print(data_path)
+        print(
+            f"[GAME] start playing context={CONTEXT or 'none'} "
+            f"model={model_name} data_path={data_path}",
+            flush=True,
+        )
 
         if CONTEXT is None:
             print("Warning: No context available, cannot start playing.")
@@ -268,6 +315,11 @@ async def handle_client_message(event_name, data):
         context = data.get("context")
         if context in ["ssvep", "imagery", "relax"]:
             CONTEXT = context
+            print(
+                f"[GAME] context changed to {CONTEXT}; "
+                f"model_loaded={MODELS.get(CONTEXT) is not None}",
+                flush=True,
+            )
         else:
             print(f"Unknown context: {context}")
             return
@@ -283,14 +335,17 @@ async def websocket_server_async():
 
     async def on_message(websocket, message):
         timestamp = TIMESTAMP_DATA['latest']
-        # print(f"Message from {id(websocket)} at {timestamp}: {message}")
-        print(f"Message from {id(websocket)} at {timestamp}")
 
         # Extract the required fields
         try:
             parsed = json.loads(message)
             event_name = parsed.get("eventName")
             data = parsed.get("data", {})
+            print(
+                f"[WS] received client={id(websocket)} eeg_timestamp={timestamp} "
+                f"event={event_name} data={json.dumps(data, separators=(',', ':'))}",
+                flush=True,
+            )
 
             await handle_client_message(event_name, data)
 
@@ -304,17 +359,24 @@ async def websocket_server_async():
     async def on_connect(websocket, path):
         client_id = id(websocket)
         CONNECTED_CLIENTS[client_id] = websocket
-        print(f"Client connected: {client_id}")
+        print(
+            f"[WS] client connected id={client_id} path={path} "
+            f"clients={len(CONNECTED_CLIENTS)}",
+            flush=True,
+        )
 
     async def on_disconnect(websocket):
         client_id = id(websocket)
         CONNECTED_CLIENTS.pop(client_id, None)
-        print(f"Client disconnected: {client_id}")
+        print(
+            f"[WS] client disconnected id={client_id} clients={len(CONNECTED_CLIENTS)}",
+            flush=True,
+        )
 
     SERVER.on_connect(on_connect).on_message(on_message).on_disconnect(on_disconnect)
 
     await SERVER.start()
-    print("WebSocket server started!")
+    print("[WS] server started at ws://localhost:8765", flush=True)
 
     try:
         await asyncio.Future()
@@ -330,6 +392,11 @@ async def main():
 
 
 async def send_to_all_clients(message):
+    print(
+        f"[WS] broadcasting clients={len(CONNECTED_CLIENTS)} "
+        f"payload={json.dumps(message, separators=(',', ':'))}",
+        flush=True,
+    )
     for ws in CONNECTED_CLIENTS.values():
         await SERVER.send_to_client(ws, message)
 
