@@ -3,6 +3,8 @@ import os
 import time
 import json
 import uuid
+import traceback
+from datetime import datetime
 from tempfile import TemporaryFile
 import multiprocessing
 
@@ -48,6 +50,51 @@ LATEST_RECORDINGS = {
     "imagery": None,
     "ssvep": None
 }
+
+
+def find_latest_context_recording(context, recordings_path='./recordings'):
+    """Return the newest recording saved for a context, or None if none exists."""
+    prefix = f'recording_{context}_'
+    candidates = []
+
+    if not os.path.isdir(recordings_path):
+        return None
+
+    for filename in os.listdir(recordings_path):
+        if filename.startswith(prefix) and filename.endswith('.raw.fif'):
+            candidates.append(os.path.join(recordings_path, filename))
+
+    if not candidates:
+        return None
+
+    return max(candidates, key=os.path.getmtime)
+
+
+def find_latest_recording_with_labels(required_labels, recordings_path='./recordings'):
+    """Find the newest FIF recording containing every requested cue label."""
+    if not os.path.isdir(recordings_path):
+        return None
+
+    candidates = [
+        os.path.join(recordings_path, filename)
+        for filename in os.listdir(recordings_path)
+        if filename.startswith('recording') and filename.endswith('.raw.fif')
+    ]
+
+    for recording_path in sorted(candidates, key=os.path.getmtime, reverse=True):
+        try:
+            raw = mne.io.read_raw_fif(recording_path, preload=False, verbose='ERROR')
+            cue_labels = {
+                description.split(' ', 1)[1]
+                for description in raw.annotations.description
+                if description.startswith('cue') and ' ' in description
+            }
+            if set(required_labels).issubset(cue_labels):
+                return recording_path
+        except Exception as error:
+            print(f"Warning: Could not inspect recording '{recording_path}': {error}")
+
+    return None
 
 
 def get_raw_stream():
@@ -103,6 +150,7 @@ async def acquisition_loop_async(window_size=2, save_path=None):
     global OUTFILE, TIMESTAMP_DATA, STREAM
     last_read_time = None
     window_index = 0
+    last_runtime_state = None
 
     try:
         while True:
@@ -115,42 +163,7 @@ async def acquisition_loop_async(window_size=2, save_path=None):
                 continue
 
             data, timestamps = STREAM.get_data(winsize=window_size)
-            previous_read_time = last_read_time
             window_index += 1
-
-            sampling_rate = float(STREAM.info["sfreq"])
-            duration = timestamps[-1] - timestamps[0] if len(timestamps) > 1 else 0.0
-            if previous_read_time is None:
-                timestamp_gap = "first"
-            else:
-                timestamp_gap = f"{(timestamps[0] - previous_read_time) * 1000:.3f}ms"
-
-            non_finite_count = int(data.size - np.count_nonzero(np.isfinite(data)))
-            flat_channel_count = int(sum(np.ptp(channel) == 0 for channel in data))
-            buffer_after = STREAM.n_new_samples
-
-            print(
-                f"[LSL] window={window_index:06d} context={CONTEXT or 'none'} "
-                f"playing={bool(IS_PLAYING)} shape={data.shape} sfreq={sampling_rate:.2f}Hz "
-                f"duration={duration:.3f}s gap={timestamp_gap} "
-                f"buffer_before={winsize_samples} buffer_after={buffer_after} "
-                f"non_finite={non_finite_count} flat_channels={flat_channel_count}",
-                flush=True,
-            )
-
-            channel_names = STREAM.info["ch_names"]
-            channel_stats = []
-            for channel_index, channel in enumerate(data):
-                finite_values = channel[np.isfinite(channel)]
-                channel_name = channel_names[channel_index] if channel_index < len(channel_names) else str(channel_index)
-                if finite_values.size == 0:
-                    channel_stats.append(f"{channel_name}[no finite samples]")
-                else:
-                    channel_stats.append(
-                        f"{channel_name}[min={np.min(finite_values):.3e} "
-                        f"max={np.max(finite_values):.3e} std={np.std(finite_values):.3e}]"
-                    )
-            print(f"[LSL] channels {' '.join(channel_stats)}", flush=True)
 
             # Update first timestamp (if needed)
             if TIMESTAMP_DATA['first'] is None:
@@ -161,9 +174,23 @@ async def acquisition_loop_async(window_size=2, save_path=None):
             last_read_time = timestamps[-1]
             TIMESTAMP_DATA['latest'] = last_read_time
 
+            runtime_state = (bool(IS_PLAYING), CONTEXT, len(CONNECTED_CLIENTS))
+            if runtime_state != last_runtime_state:
+                print(
+                    f"[RUNTIME] eeg_stream=active playing={runtime_state[0]} "
+                    f"context={runtime_state[1] or 'none'} clients={runtime_state[2]}",
+                    flush=True,
+                )
+                if not IS_PLAYING:
+                    print(
+                        "[RUNTIME] predictions are disabled until Unity sends startPlaying",
+                        flush=True,
+                    )
+                last_runtime_state = runtime_state
+
             # Use realtime processing if the game is playing
             if IS_PLAYING:
-                process_realtime_data(data)
+                process_realtime_data(data, window_index, timestamps)
 
             # Write to OUTFILE if possible
             if save_path and data.size > 0 and OUTFILE is not None:
@@ -172,7 +199,7 @@ async def acquisition_loop_async(window_size=2, save_path=None):
         print("Acquisition stopped.")
 
 
-def process_realtime_data(data):
+def process_realtime_data(data, window_index=None, timestamps=None):
     # Based on context, load the model
     if CONTEXT is None:
         print("[MODEL] skipped: no gameplay context has been selected", flush=True)
@@ -188,8 +215,62 @@ def process_realtime_data(data):
     # np.save(f'./recordings/data_focus_{uid}', data)
 
     # Make prediction for the data chunk
-    prediction = model.predict(data)
-    print(f"[MODEL] context={CONTEXT} prediction={prediction}", flush=True)
+    probabilities = {}
+    ssvep_correlations = {}
+    if CONTEXT == "relax" and hasattr(model, "predict_with_details"):
+        prediction, probabilities = model.predict_with_details(data)
+    elif CONTEXT == "ssvep" and hasattr(model, "predict_with_details"):
+        prediction, ssvep_correlations = model.predict_with_details(data)
+    else:
+        prediction = model.predict(data)
+    prediction = str(prediction)
+
+    log_prefix = "[RELAX]" if CONTEXT == "relax" else "[MODEL]"
+    if CONTEXT == "relax":
+        wall_time = datetime.now().astimezone().isoformat(timespec="milliseconds")
+        lsl_start = float(timestamps[0]) if timestamps is not None and len(timestamps) else float("nan")
+        lsl_end = float(timestamps[-1]) if timestamps is not None and len(timestamps) else float("nan")
+        focus_probability = probabilities.get("focus")
+        relax_probability = probabilities.get("relax")
+        confidence = max(probabilities.values()) if probabilities else None
+
+        def format_probability(value):
+            return f"{value:.4f}" if value is not None else "unavailable"
+
+        print(
+            f"[CLASSIFY][RELAX] time={wall_time} window={window_index or '-'} "
+            f"lsl_start={lsl_start:.3f} lsl_end={lsl_end:.3f} "
+            f"samples={data.shape[-1]} prediction={prediction} "
+            f"p_focus={format_probability(focus_probability)} "
+            f"p_relax={format_probability(relax_probability)} "
+            f"confidence={format_probability(confidence)}",
+            flush=True,
+        )
+    elif CONTEXT == "ssvep":
+        wall_time = datetime.now().astimezone().isoformat(timespec="milliseconds")
+        lsl_start = float(timestamps[0]) if timestamps is not None and len(timestamps) else float("nan")
+        lsl_end = float(timestamps[-1]) if timestamps is not None and len(timestamps) else float("nan")
+        ranked_correlations = sorted(ssvep_correlations.values(), reverse=True)
+        margin = (
+            ranked_correlations[0] - ranked_correlations[1]
+            if len(ranked_correlations) >= 2
+            else float("nan")
+        )
+        print(
+            f"[CLASSIFY][SSVEP] time={wall_time} window={window_index or '-'} "
+            f"lsl_start={lsl_start:.3f} lsl_end={lsl_end:.3f} "
+            f"samples={data.shape[-1]} prediction={prediction} "
+            f"corr_8={ssvep_correlations.get('8.0', float('nan')):.4f} "
+            f"corr_11={ssvep_correlations.get('11.0', float('nan')):.4f} "
+            f"corr_15={ssvep_correlations.get('15.0', float('nan')):.4f} "
+            f"winner_margin={margin:.4f}",
+            flush=True,
+        )
+    else:
+        print(
+            f"{log_prefix} window={window_index or '-'} context={CONTEXT} prediction={prediction}",
+            flush=True,
+        )
 
     # Send the prediction to all clients
     asyncio.create_task(send_to_all_clients({"currentLabel": prediction}))
@@ -245,7 +326,12 @@ async def handle_client_message(event_name, data):
         OUTFILE = None
 
         # Save the data, close the file afterwards
-        save_path, uid = save_as_fif(outfile, save_path='./recordings', info=STREAM.info)
+        save_path, uid = save_as_fif(
+            outfile,
+            save_path='./recordings',
+            info=STREAM.info,
+            context=CONTEXT,
+        )
         outfile.close()
 
         # Start training the model
@@ -259,7 +345,11 @@ async def handle_client_message(event_name, data):
         # Train the model using the latest recording for the context
         # By default, model is 'auto', and path is latest
         if CONTEXT == "ssvep":
-            model = SSVEPModel(SSVEP_FREQS, model_variant='auto', data_path='')
+            model = SSVEPModel(
+                SSVEP_FREQS,
+                model_variant='auto',
+                data_path='',
+            )
         elif CONTEXT == "imagery":
             model = ImageryModel(model_variant='auto', data_path=LATEST_RECORDINGS[CONTEXT])
         elif CONTEXT == "relax":
@@ -274,11 +364,15 @@ async def handle_client_message(event_name, data):
         print(f"Important: Model {CONTEXT} trained with data from {LATEST_RECORDINGS[CONTEXT]}!")
         print(f"Model accuracy: {model.accuracy}")
         print(f"Confusion matrix: {model.confusion_matrix}")
+        print("[GAME] training complete; predictions remain disabled until startPlaying", flush=True)
     elif event_name == "startPlaying":
         IS_PLAYING = True
 
         # Load the model based on the data received, it's either 'auto' or the name of the model
         # Same for the data_path, it can be either 'auto' or the path to the data
+        requested_context = data.get("context")
+        if requested_context in ["ssvep", "imagery", "relax"]:
+            CONTEXT = requested_context
         model_name = data.get("modelName")
         data_path = data.get("dataPath")
         print(
@@ -296,11 +390,23 @@ async def handle_client_message(event_name, data):
             data_path = LATEST_RECORDINGS.get(CONTEXT)
 
         if CONTEXT == "ssvep":
-            model = SSVEPModel(SSVEP_FREQS, model_variant=model_name, data_path='')
+            model = SSVEPModel(
+                SSVEP_FREQS,
+                model_variant=model_name,
+                data_path='',
+            )
         elif CONTEXT == "imagery":
             model = ImageryModel(model_variant=model_name, data_path=data_path)
         elif CONTEXT == "relax":
-            model = RelaxModel(model_variant=model_name, data_path=data_path)
+            latest_relax_recording = (
+                LATEST_RECORDINGS.get("relax")
+                or find_latest_recording_with_labels({"focus", "relax"})
+            )
+            if latest_relax_recording is None:
+                print("[MODEL] skipped: no focus/relax calibration recording was found", flush=True)
+                return
+            LATEST_RECORDINGS["relax"] = latest_relax_recording
+            model = RelaxModel(model_variant=model_name, data_path=latest_relax_recording)
         else:
             print(f"Unknown context: {CONTEXT}")
             return
@@ -336,25 +442,27 @@ async def websocket_server_async():
     async def on_message(websocket, message):
         timestamp = TIMESTAMP_DATA['latest']
 
-        # Extract the required fields
         try:
             parsed = json.loads(message)
-            event_name = parsed.get("eventName")
-            data = parsed.get("data", {})
-            print(
-                f"[WS] received client={id(websocket)} eeg_timestamp={timestamp} "
-                f"event={event_name} data={json.dumps(data, separators=(',', ':'))}",
-                flush=True,
-            )
-
-            await handle_client_message(event_name, data)
-
-            # await SERVER.send_to_client(websocket, {"response": "Message received"})
-        except Exception as e:
-            print(f"Error parsing message: {message}")
-            print(e)
-            await SERVER.send_to_client(websocket, {"error": "Invalid message format"})
+        except json.JSONDecodeError as error:
+            print(f"[WS][ERROR] invalid JSON: {error}; message={message}", flush=True)
+            await SERVER.send_to_client(websocket, {"error": "Invalid JSON"})
             return
+
+        event_name = parsed.get("eventName")
+        data = parsed.get("data", {})
+        print(
+            f"[WS] received client={id(websocket)} eeg_timestamp={timestamp} "
+            f"event={event_name} data={json.dumps(data, separators=(',', ':'))}",
+            flush=True,
+        )
+
+        try:
+            await handle_client_message(event_name, data)
+        except Exception as error:
+            print(f"[WS][ERROR] event={event_name} failed: {error}", flush=True)
+            traceback.print_exc()
+            await SERVER.send_to_client(websocket, {"error": f"Event '{event_name}' failed"})
 
     async def on_connect(websocket, path):
         client_id = id(websocket)
@@ -401,7 +509,7 @@ async def send_to_all_clients(message):
         await SERVER.send_to_client(ws, message)
 
 
-def save_as_fif(outfile, save_path, info):
+def save_as_fif(outfile, save_path, info, context=None):
     _ = outfile.seek(0)
     full_data = []
 
@@ -436,7 +544,8 @@ def save_as_fif(outfile, save_path, info):
     print(raw.annotations)
     os.makedirs(save_path, exist_ok=True)
     uid = str(uuid.uuid4())[-4:]
-    full_save_path = os.path.join(save_path, f'recording_{uid}.raw.fif')
+    context_suffix = f'_{context}' if context else ''
+    full_save_path = os.path.join(save_path, f'recording{context_suffix}_{uid}.raw.fif')
     raw.save(full_save_path, overwrite=True)
     print(f"Data saved to {full_save_path}")
 
@@ -444,9 +553,27 @@ def save_as_fif(outfile, save_path, info):
 
 
 if __name__ == '__main__':
-    # TODO: SSEVP model is hardcoded
-    MODELS["ssvep"] = SSVEPModel(SSVEP_FREQS, model_variant='auto', data_path='')
+    # Keep SSVEP on the original hardcoded calibration recording.
+    MODELS["ssvep"] = SSVEPModel(
+        SSVEP_FREQS,
+        model_variant='auto',
+        data_path='',
+    )
     MODELS["ssvep"].load_model()
+
+    # Focus/relax recordings may have legacy or incorrect filenames, so identify them by annotations.
+    LATEST_RECORDINGS["relax"] = find_latest_recording_with_labels({"focus", "relax"})
+    if LATEST_RECORDINGS["relax"] is not None:
+        print(f"Using relax recording: {LATEST_RECORDINGS['relax']}")
+        MODELS["relax"] = RelaxModel(
+            model_variant='auto',
+            data_path=LATEST_RECORDINGS["relax"],
+        )
+        MODELS["relax"].load_model()
+        print(f"Relax model accuracy: {MODELS['relax'].accuracy}")
+        print(f"Relax confusion matrix: {MODELS['relax'].confusion_matrix}")
+    else:
+        print("Warning: No focus/relax calibration recording was found.")
 
     # Declare server as a global variable
     SERVER = WebSocketServer()

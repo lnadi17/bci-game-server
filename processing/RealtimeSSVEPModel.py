@@ -1,4 +1,5 @@
 import numpy as np
+import os
 from sklearn.cross_decomposition import CCA
 from sklearn.metrics import confusion_matrix
 
@@ -47,7 +48,13 @@ class CCAClassifier:
 
     def predict(self, X):
         """Classify the EEG signals using CCA."""
+        predictions, _ = self.predict_with_details(X)
+        return predictions
+
+    def predict_with_details(self, X):
+        """Classify EEG and return the CCA correlation for every target frequency."""
         predictions = []
+        correlation_rows = []
         for eeg_data in X:
             length = eeg_data.shape[1]
             references = np.array([
@@ -58,7 +65,8 @@ class CCAClassifier:
             predicted_class = self.frequencies[np.argmax(correlations)]
             predicted_class = f'{predicted_class:.1f}'
             predictions.append(predicted_class)
-        return np.array(predictions)
+            correlation_rows.append(correlations)
+        return np.array(predictions), np.array(correlation_rows)
 
 
 class SSVEPModel:
@@ -96,8 +104,17 @@ class SSVEPModel:
         clf = CCAClassifier(sampling_rate=250, frequencies=self.freqs, num_targets=len(self.freqs),
                             n_components=1, harmonics=1)
 
-        # TODO: data_path is hardcoded because process_chunk needs that processor.process() is called first
-        self.data_path = 'recordings/recording_ssvep1.raw.fif'
+        # Keep the original recording as a fallback until a player completes SSVEP calibration.
+        default_data_path = 'recordings/recording_ssvep1.raw.fif'
+        if not self.data_path or not os.path.isfile(self.data_path):
+            if self.data_path:
+                print(
+                    f"Warning: SSVEP recording '{self.data_path}' was not found; "
+                    f"falling back to '{default_data_path}'."
+                )
+            self.data_path = default_data_path
+
+        print(f"Using SSVEP recording: {self.data_path}")
         self.processor = BCIDataProcessor(self.data_path, l_freq=l_freq, h_freq=h_freq, window_size=window_size,
                                           window_overlap=window_overlap, rescale=rescale, filter_method=filter_method)
         # Only "fit" if data_path is provided
@@ -117,7 +134,16 @@ class SSVEPModel:
         return clf
 
     def predict(self, data):
+        prediction, _ = self.predict_with_details(data)
+        return prediction
+
+    def predict_with_details(self, data):
         if self.model is None:
             raise ValueError("Model not loaded. Call load_model() first.")
         processed_chunk = self.processor.process_chunk(data)
-        return self.model.predict(processed_chunk)[0]
+        predictions, correlation_rows = self.model.predict_with_details(processed_chunk)
+        correlations = {
+            f'{frequency:.1f}': float(correlation)
+            for frequency, correlation in zip(self.freqs, correlation_rows[0])
+        }
+        return predictions[0], correlations

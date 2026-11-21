@@ -56,7 +56,22 @@ class RelaxModel:
         return clf
 
     def predict(self, data):
+        prediction, _ = self.predict_with_details(data)
+        return prediction
+
+    def predict_with_details(self, data):
+        """Predict one live window and expose the classifier's class probabilities."""
         if self.model is None:
             raise ValueError("Model not loaded. Call load_model() first.")
         processed_chunk = self.processor.process_chunk(data)
-        return self.model.predict(processed_chunk)[0]
+        prediction = self.model.predict(processed_chunk)[0]
+
+        probabilities = {}
+        if hasattr(self.model, "predict_proba"):
+            values = self.model.predict_proba(processed_chunk)[0]
+            probabilities = {
+                str(label): float(probability)
+                for label, probability in zip(self.model.classes_, values)
+            }
+
+        return prediction, probabilities
