@@ -25,6 +25,12 @@ set_log_level("WARNING")
 # TODO: Frequencies are hardcoded
 SSVEP_FREQS = [8, 11, 15]
 
+# SSVEP RECORDING SOURCE: leave exactly one of these two lines uncommented.
+SSVEP_RECORDING_SOURCE = "hardcoded"
+# SSVEP_RECORDING_SOURCE = "latest_training"
+
+SSVEP_HARDCODED_RECORDING = "recordings/recording_ssvep1.raw.fif"
+
 # Boolean that indicates if the game is playing or not
 IS_PLAYING = None
 # Context variable to identify which model to train or use (while playing)
@@ -68,6 +74,19 @@ def find_latest_context_recording(context, recordings_path='./recordings'):
         return None
 
     return max(candidates, key=os.path.getmtime)
+
+
+def resolve_ssvep_recording():
+    """Resolve SSVEP data from the single source switch near the top of this file."""
+    if SSVEP_RECORDING_SOURCE == "hardcoded":
+        return SSVEP_HARDCODED_RECORDING
+
+    if SSVEP_RECORDING_SOURCE == "latest_training":
+        return find_latest_context_recording("ssvep")
+
+    raise ValueError(
+        "SSVEP_RECORDING_SOURCE must be either 'hardcoded' or 'latest_training'."
+    )
 
 
 def find_latest_recording_with_labels(required_labels, recordings_path='./recordings'):
@@ -348,7 +367,7 @@ async def handle_client_message(event_name, data):
             model = SSVEPModel(
                 SSVEP_FREQS,
                 model_variant='auto',
-                data_path='',
+                data_path=resolve_ssvep_recording(),
             )
         elif CONTEXT == "imagery":
             model = ImageryModel(model_variant='auto', data_path=LATEST_RECORDINGS[CONTEXT])
@@ -393,7 +412,7 @@ async def handle_client_message(event_name, data):
             model = SSVEPModel(
                 SSVEP_FREQS,
                 model_variant=model_name,
-                data_path='',
+                data_path=resolve_ssvep_recording(),
             )
         elif CONTEXT == "imagery":
             model = ImageryModel(model_variant=model_name, data_path=data_path)
@@ -553,11 +572,16 @@ def save_as_fif(outfile, save_path, info, context=None):
 
 
 if __name__ == '__main__':
-    # Keep SSVEP on the original hardcoded calibration recording.
+    # Resolve SSVEP through the single source switch near the top of this file.
+    LATEST_RECORDINGS["ssvep"] = resolve_ssvep_recording()
+    print(
+        f"SSVEP recording source: {SSVEP_RECORDING_SOURCE}; "
+        f"path: {LATEST_RECORDINGS['ssvep']}"
+    )
     MODELS["ssvep"] = SSVEPModel(
         SSVEP_FREQS,
         model_variant='auto',
-        data_path='',
+        data_path=LATEST_RECORDINGS["ssvep"],
     )
     MODELS["ssvep"].load_model()
 
