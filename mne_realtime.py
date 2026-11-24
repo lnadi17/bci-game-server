@@ -26,8 +26,8 @@ set_log_level("WARNING")
 SSVEP_FREQS = [8, 11, 15]
 
 # SSVEP RECORDING SOURCE: leave exactly one of these two lines uncommented.
-SSVEP_RECORDING_SOURCE = "hardcoded"
-# SSVEP_RECORDING_SOURCE = "latest_training"
+# SSVEP_RECORDING_SOURCE = "hardcoded"
+SSVEP_RECORDING_SOURCE = "latest_training"
 
 SSVEP_HARDCODED_RECORDING = "recordings/recording_ssvep1.raw.fif"
 
